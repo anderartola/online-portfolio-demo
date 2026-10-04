@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Online Portfolio Learning: bandits on real markets</title>
+<meta name="description" content="UCB1, KL-UCB, EXP3, EXP3++, Hedge and Exponentiated Gradient learn which assets to hold from real market data, updated daily. Wealth and regret against the best asset in hindsight.">
+<style>
+  :root {
+    --bg: #fafaf7;
+    --surface: #ffffff;
+    --surface-2: #f1efe8;
+    --border: rgba(0,0,0,0.12);
+    --border-strong: rgba(0,0,0,0.25);
+    --text: #1a1a1a;
+    --text-secondary: #555;
+    --text-tertiary: #888;
+    --grid: rgba(0,0,0,0.06);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    /* series colours, one per algorithm, fixed order */
+    --s-ucb1: #2a78d6;
+    --s-klucb: #eb6834;
+    --s-exp3: #1baf7a;
+    --s-exp3pp: #eda100;
+    --s-hedge: #e87ba4;
+    --s-eg: #008300;
+    --s-bench: #6b6a66;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1a;
+      --surface: #242424;
+      --surface-2: #2e2e2c;
+      --border: rgba(255,255,255,0.12);
+      --border-strong: rgba(255,255,255,0.25);
+      --text: #f0f0f0;
+      --text-secondary: #b0b0b0;
+      --text-tertiary: #888;
+      --grid: rgba(255,255,255,0.07);
+      --s-ucb1: #3987e5;
+      --s-klucb: #d95926;
+      --s-exp3: #199e70;
+      --s-exp3pp: #c98500;
+      --s-hedge: #d55181;
+      --s-eg: #008300;
+      --s-bench: #9a998f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    font-family: var(--font-sans);
+    background: var(--bg); color: var(--text); line-height: 1.6;
+  }
+  .container { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 500; margin: 0 0 0.5rem; }
+  .lede { font-size: 15px; color: var(--text-secondary); margin: 0 0 1rem; }
+  h2 { font-size: 18px; font-weight: 500; margin: 2rem 0 0.75rem; }
+  h3 { font-size: 15px; font-weight: 500; margin: 1.25rem 0 0.4rem; }
+  p { margin: 0 0 1rem; font-size: 15px; }
+  strong { font-weight: 500; }
+  code { font-family: var(--font-mono); font-size: 0.9em; background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+  a { color: inherit; text-underline-offset: 2px; }
+
+  .data-status { font-size: 12px; color: var(--text-tertiary); font-family: var(--font-mono); margin-bottom: 1.5rem; }
+  .data-status.error { color: #c0392b; font-family: var(--font-sans); font-size: 14px; }
+
+  /* controls */
+  .controls { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 10px; }
+  .control-row { display: flex; gap: 10px 18px; align-items: center; flex-wrap: wrap; }
+  .control-label { font-size: 12px; color: var(--text-secondary); min-width: 64px; }
+  .seg { display: inline-flex; border: 0.5px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 0.5px solid var(--border-strong); }
+  .seg button:last-child { border-right: 0; }
+  button, select {
+    font-family: var(--font-sans); font-size: 13px; padding: 5px 12px;
+    border-radius: 6px; border: 0.5px solid var(--border-strong);
+    background: transparent; color: var(--text); cursor: pointer; transition: background 0.15s;
+  }
+  select { background: var(--surface); padding: 5px 8px; }
+  button:hover { background: var(--surface); }
+  button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { font-family: var(--font-mono); font-size: 12px; padding: 3px 10px; border-radius: 99px; }
+  .hint { font-size: 12px; color: var(--text-tertiary); }
+
+  /* charts */
+  .chart-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: 8px; padding: 14px 14px 8px; margin-bottom: 1rem; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .chart-title { font-size: 14px; font-weight: 500; }
+  .chart-sub { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+  .chart-wrap { position: relative; height: 320px; transition: opacity 0.2s; }
+  .busy .chart-wrap { opacity: 0.45; }
+  .legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin: 0 0 1rem; }
+  .legend button { border: 0; padding: 2px 4px; font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+  .legend button:hover { background: var(--surface-2); }
+  .legend button[aria-pressed="false"] { opacity: 0.4; text-decoration: line-through; }
+  .legend button[aria-pressed="true"] { background: transparent; color: var(--text-secondary); }
+  .legend-group { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; align-self: center; }
+  .key { display: inline-block; width: 16px; height: 0; border-top: 2px solid; }
+  p .key { vertical-align: middle; margin-left: 2px; }
+  .key.dashed { border-top-style: dashed; }
+  .key.dotted { border-top-style: dotted; }
+
+  /* results table */
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 0.5px solid var(--border); vertical-align: baseline; }
+  th { font-weight: 500; font-size: 12px; color: var(--text-secondary); }
+  td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.hold { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+  tr.section td { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; padding-top: 14px; }
+  .algo-name { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; white-space: nowrap; }
+  .tag { font-size: 11px; color: var(--text-tertiary); }
+  .muted { color: var(--text-tertiary); }
+
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 0.5px solid var(--border); font-size: 13px; color: var(--text-tertiary); }
+  .footer p { font-size: 13px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+  @media (max-width: 560px) {
+    .chart-wrap { height: 260px; }
+    .control-label { min-width: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Learning a portfolio online</h1>
+<p class="lede">
+  Six online learning algorithms (four bandits, two with full information) decide each period which assets to hold. They start knowing nothing and learn only from the returns they observe. The page reloads the latest market data on every visit and replays the whole history, so you can see how each learner would have done up to today and how far it trails the best asset in hindsight.
+</p>
+<div id="data-status" class="data-status" role="status">Loading market data…</div>
+
+<div class="controls" aria-label="Backtest settings">
+  <div class="control-row">
+    <span class="control-label">Rebalance</span>
+    <div class="seg" id="freq-seg" role="group" aria-label="Rebalancing frequency">
+      <button data-freq="daily" aria-pressed="false">Daily</button>
+      <button data-freq="weekly" aria-pressed="true">Weekly</button>
+      <button data-freq="monthly" aria-pressed="false">Monthly</button>
+    </div>
+    <label class="control-label" for="start-select" style="min-width:0">Start</label>
+    <select id="start-select"></select>
+    <span class="hint" id="rounds-hint"></span>
+  </div>
+  <div class="control-row">
+    <span class="control-label">Assets</span>
+    <div class="chips" id="asset-chips" role="group" aria-label="Assets available to the learners"></div>
+  </div>
+</div>
+
+<div class="legend" id="legend" aria-label="Series (click to show or hide)"></div>
+
+<div class="chart-card" id="wealth-card">
+  <div class="chart-head">
+    <span class="chart-title">Growth of $1</span>
+  </div>
+  <div class="chart-sub">Log scale. Single-asset pickers are scored by their expected log-wealth; EXP3 and EXP3++ are averaged over many random runs.</div>
+  <div class="chart-wrap"><canvas id="wealth-chart" aria-label="Wealth of each algorithm over time"></canvas></div>
+</div>
+
+<div class="chart-card" id="regret-card">
+  <div class="chart-head">
+    <span class="chart-title">Regret against the best asset in hindsight</span>
+    <div class="seg" id="regret-seg" role="group" aria-label="Regret view">
+      <button data-mode="cum" aria-pressed="true">Cumulative</button>
+      <button data-mode="avg" aria-pressed="false">Per period</button>
+    </div>
+  </div>
+  <div class="chart-sub" id="regret-sub">R<sub>t</sub> = max<sub>i</sub> log W<sub>i,t</sub> − log W<sub>alg,t</sub>. A regret of R means the best single asset so far ended with e<sup>R</sup> times more money.</div>
+  <div class="chart-wrap"><canvas id="regret-chart" aria-label="Regret of each algorithm over time"></canvas></div>
+</div>
+
+<h2>Results</h2>
+<div class="table-scroll">
+  <table id="results">
+    <thead>
+      <tr>
+        <th>Learner</th>
+        <th>Feedback</th>
+        <th class="num">$1 became</th>
+        <th class="num">CAGR</th>
+        <th class="num">Regret</th>
+        <th>Holding next period</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<h2>What's going on</h2>
+<p>
+  Each period (a day, week or month) every learner commits to a distribution p<sub>t</sub> over the K assets. The market then reveals gross returns x<sub>t,i</sub> = P<sub>i</sub>(end)/P<sub>i</sub>(start). Prices are total-return (dividends reinvested), fetched from Yahoo Finance by a scheduled GitHub Action after every US trading day.
+</p>
+<p>
+  The bandit algorithms need rewards in [0,1], so the log-return g = log x is mapped to r = ½ + g / (2c), clipped, with c = 5% daily, 10% weekly and 20% monthly. This is an affine map, so maximising reward is the same as maximising log-wealth, except on the rare periods that get clipped.
+</p>
+
+<h3>Bandit feedback: you only see what you hold</h3>
+<p>
+  <span class="key" style="border-top-color:var(--s-ucb1)"></span> <strong>UCB1</strong> holds the asset with the highest optimistic index, mean + √(2 ln t / n<sub>i</sub>). It assumes each asset's rewards are i.i.d.
+  <span class="key" style="border-top-color:var(--s-klucb)"></span> <strong>KL-UCB</strong> builds a tighter upper confidence bound from the Bernoulli KL divergence: the largest q with n<sub>i</sub>·kl(mean, q) ≤ ln t.
+  <span class="key" style="border-top-color:var(--s-exp3)"></span> <strong>EXP3</strong> makes no statistical assumptions. It keeps importance-weighted reward estimates and samples an asset from exponential weights, which guarantees O(√(KT log K)) regret even against an adversarial market.
+  <span class="key" style="border-top-color:var(--s-exp3pp)"></span> <strong>EXP3++</strong> (Seldin &amp; Slivkins, 2014) adds exploration that shrinks with the empirical gaps between assets. It keeps EXP3's adversarial guarantee and gets polylogarithmic regret when the market behaves stochastically.
+</p>
+
+<h3>Full information: you see every price</h3>
+<p>
+  In a real market you see every price, not only the one you hold, so bandit feedback discards information you would have for free. The two full-information learners show what that information is worth.
+  <span class="key" style="border-top-color:var(--s-hedge)"></span> <strong>Hedge</strong> (exponential weights) uses the same rewards as the bandits but updates on all K of them each period.
+  <span class="key" style="border-top-color:var(--s-eg)"></span> <strong>EG</strong> (Exponentiated Gradient, Helmbold et al., 1998) is a true portfolio algorithm. It holds a diversified, rebalanced mix and takes multiplicative steps along the gradient of log-wealth. Diversification lets a portfolio beat every single asset, so EG's regret can go negative.
+</p>
+
+<h3>Reading the regret</h3>
+<p>
+  Regret is measured in log-wealth against the best single asset in hindsight, re-chosen at every date. When the leader changes (bonds in 2010–11, Apple in the mid-2010s, NVIDIA since), the curves can jump or fall. Over periods this short the gaps between assets' mean returns are tiny next to their volatility, so the stochastic bandits explore for a long time and EXP3 stays close to uniform. That is the theory working as stated, not a bug: √T regret only becomes small relative to T after many rounds.
+</p>
+<p class="muted" style="font-size:13px">
+  Caveats: no transaction costs, taxes or slippage, and the named stocks were picked with hindsight (survivorship bias), which flatters every strategy that finds them. This is an illustration of learning algorithms, not investment advice.
+</p>
+
+<div class="footer">
+  <p>
+    References: Auer, Cesa-Bianchi &amp; Fischer (2002) <em>Finite-time analysis of the multiarmed bandit problem</em>; Auer et al. (2002) <em>The nonstochastic multiarmed bandit problem</em>; Garivier &amp; Cappé (2011) <em>The KL-UCB algorithm for bounded stochastic bandits and beyond</em>; Seldin &amp; Slivkins (2014) <em>One practical algorithm for both stochastic and adversarial bandits</em>; Helmbold, Schapire, Singer &amp; Warmuth (1998) <em>On-line portfolio selection using multiplicative updates</em>; Lattimore &amp; Szepesvári (2020) <em>Bandit Algorithms</em>.
+  </p>
+  <p>Source on <a href="https://github.com/anderartola/online-portfolio-demo" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
+</div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="algorithms.js"></script>
+<script>
+(function() {
+  const OP = window.OnlinePortfolio;
+  const DAY = 864e5;
+
+  const state = {
+    data: null,
+    freq: 'weekly',
+    start: '2010',
+    tickers: [],
+    regretMode: 'cum',
+    hidden: new Set(),
+    result: null,
+  };
+
+  // Series shown on both charts: six learners, then two benchmarks.
+  const SERIES = OP.ALGORITHMS.map(a => ({ id: a.id, name: a.name, group: 'learner', feedback: a.feedback, cssVar: '--s-' + a.id }))
+    .concat([
+      { id: 'best', name: 'Best asset in hindsight', group: 'benchmark', cssVar: '--s-bench', dash: [6, 4] },
+      { id: 'equal', name: 'Equal weight', group: 'benchmark', cssVar: '--s-bench', dash: [2, 3] },
+    ]);
+
+  const $ = id => document.getElementById(id);
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // ---------- URL state ----------
+  function readURL() {
+    const q = new URLSearchParams(location.search);
+    if (OP.FREQUENCIES[q.get('freq')]) state.freq = q.get('freq');
+    if (/^\d{4}$/.test(q.get('start') || '')) state.start = q.get('start');
+    if (q.get('assets')) state.tickers = q.get('assets').split(',');
+  }
+  function writeURL() {
+    const q = new URLSearchParams({ freq: state.freq, start: state.start, assets: state.tickers.join(',') });
+    history.replaceState(null, '', '?' + q.toString());
+  }
+
+  // ---------- formatting ----------
+  const fmtMoney = v => v >= 1000 ? '$' + Math.round(v).toLocaleString('en-US')
+    : v >= 100 ? '$' + v.toFixed(0) : '$' + v.toFixed(2);
+  const fmtPct = v => (v >= 0 ? '+' : '−') + Math.abs(v * 100).toFixed(1) + '%';
+  const fmtNum = (v, d) => (v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
+  const fmtDate = ms => new Date(ms).toISOString().slice(0, 10);
+
+  // ---------- controls ----------
+  function buildControls() {
+    const assets = state.data.assets;
+    const all = assets.map(a => a.ticker);
+    state.tickers = state.tickers.filter(t => all.includes(t));
+    if (state.tickers.length < 2) state.tickers = all.slice();
+
+    const chips = $('asset-chips');
+    chips.textContent = '';
+    for (const a of assets) {
+      const b = document.createElement('button');
+      b.textContent = a.ticker;
+      b.title = a.name + ' (' + a.kind + ')';
+      b.setAttribute('aria-pressed', state.tickers.includes(a.ticker));
+      b.addEventListener('click', () => {
+        const on = state.tickers.includes(a.ticker);
+        if (on && state.tickers.length <= 2) return;   // need at least two arms
+        state.tickers = on ? state.tickers.filter(t => t !== a.ticker)
+                           : all.filter(t => t === a.ticker || state.tickers.includes(t));
+        b.setAttribute('aria-pressed', !on);
+        schedule();
+      });
+      chips.appendChild(b);
+    }
+
+    const first = +state.data.dates[0].slice(0, 4);
+    const last = +state.data.dates[state.data.dates.length - 1].slice(0, 4);
+    const sel = $('start-select');
+    sel.textContent = '';
+    for (let y = first; y <= last - 1; y++) {
+      const o = document.createElement('option');
+      o.value = String(y); o.textContent = String(y);
+      sel.appendChild(o);
+    }
+    if (+state.start < first || +state.start > last - 1) state.start = String(first);
+    sel.value = state.start;
+    sel.addEventListener('change', () => { state.start = sel.value; schedule(); });
+
+    for (const b of $('freq-seg').querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', b.dataset.freq === state.freq);
+      b.addEventListener('click', () => {
+        state.freq = b.dataset.freq;
+        for (const o of $('freq-seg').querySelectorAll('button')) o.setAttribute('aria-pressed', o === b);
+        schedule();
+      });
+    }
+    for (const b of $('regret-seg').querySelectorAll('button')) {
+      b.addEventListener('click', () => {
+        state.regretMode = b.dataset.mode;
+        for (const o of $('regret-seg').querySelectorAll('button')) o.setAttribute('aria-pressed', o === b);
+        renderRegret();
+      });
+    }
+  }
+
+  function buildLegend() {
+    const legend = $('legend');
+    legend.textContent = '';
+    let group = null;
+    for (const s of SERIES) {
+      if (s.group !== group) {
+        group = s.group;
+        const g = document.createElement('span');
+        g.className = 'legend-group';
+        g.textContent = group === 'learner' ? 'Learners' : 'Benchmarks';
+        legend.appendChild(g);
+      }
+      const b = document.createElement('button');
+      b.setAttribute('aria-pressed', !state.hidden.has(s.id));
+      const key = document.createElement('span');
+      key.className = 'key' + (s.id === 'best' ? ' dashed' : s.id === 'equal' ? ' dotted' : '');
+      key.style.borderTopColor = 'var(' + s.cssVar + ')';
+      b.appendChild(key);
+      b.appendChild(document.createTextNode(s.name));
+      b.addEventListener('click', () => {
+        if (state.hidden.has(s.id)) state.hidden.delete(s.id); else state.hidden.add(s.id);
+        b.setAttribute('aria-pressed', !state.hidden.has(s.id));
+        for (const c of [wealthChart, regretChart]) {
+          const ds = c.data.datasets.find(d => d.seriesId === s.id);
+          if (ds) ds.hidden = state.hidden.has(s.id);
+          c.update('none');
+        }
+      });
+      legend.appendChild(b);
+    }
+  }
+
+  // ---------- charts ----------
+  const crosshair = {
+    id: 'crosshair',
+    afterDatasetsDraw(chart) {
+      const act = chart.tooltip && chart.tooltip.getActiveElements();
+      if (!act || !act.length) return;
+      const x = act[0].element.x, { top, bottom } = chart.chartArea, ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = css('--border-strong'); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+      ctx.restore();
+    },
+  };
+
+  function baseOptions(yOpts, valueFmt) {
+    const text = css('--text-secondary'), grid = css('--grid');
+    return {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+      interaction: { mode: 'index', axis: 'x', intersect: false },
+      plugins: {
+        legend: { display: false },
+        decimation: { enabled: true, algorithm: 'min-max' },
+        tooltip: {
+          backgroundColor: css('--surface'), titleColor: css('--text'), bodyColor: css('--text'),
+          borderColor: css('--border-strong'), borderWidth: 0.5, padding: 10, boxPadding: 4,
+          usePointStyle: true, titleFont: { weight: '500' }, bodyFont: { family: css('--font-mono'), size: 11 },
+          itemSort: (a, b) => b.parsed.y - a.parsed.y,
+          callbacks: {
+            title: items => items.length ? fmtDate(items[0].parsed.x) : '',
+            label: item => ' ' + valueFmt(item.parsed.y) + '  ' + item.dataset.label,
+            labelPointStyle: () => ({ pointStyle: 'line', rotation: 0 }),
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'linear', grid: { color: grid }, border: { color: grid },
+          ticks: { color: text, font: { size: 10 }, maxTicksLimit: 10, callback: v => new Date(v).getUTCFullYear() },
+        },
+        y: Object.assign({ grid: { color: grid }, border: { color: grid }, ticks: { color: text, font: { size: 10 } } }, yOpts),
+      },
+    };
+  }
+
+  function makeDatasets() {
+    return SERIES.map(s => {
+      const c = css(s.cssVar);
+      return {
+        seriesId: s.id, label: s.name, data: [], hidden: state.hidden.has(s.id),
+        borderColor: c, backgroundColor: c, borderWidth: s.group === 'benchmark' ? 1.5 : 2,
+        borderDash: s.dash || [], pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 6, tension: 0,
+      };
+    });
+  }
+
+  let wealthChart, regretChart;
+  function createCharts() {
+    if (wealthChart) wealthChart.destroy();
+    if (regretChart) regretChart.destroy();
+    wealthChart = new Chart($('wealth-chart'), {
+      type: 'line', data: { datasets: makeDatasets() }, plugins: [crosshair],
+      options: baseOptions({
+        type: 'logarithmic',
+        ticks: {
+          color: css('--text-secondary'), font: { size: 10 }, autoSkip: false,
+          callback: v => { const m = v / Math.pow(10, Math.floor(Math.log10(v) + 1e-9));
+                           return [1, 2, 5].some(k => Math.abs(m - k) < 1e-6) ? '$' + v.toLocaleString('en-US') : ''; },
+        },
+      }, fmtMoney),
+    });
+    regretChart = new Chart($('regret-chart'), {
+      type: 'line', data: { datasets: makeDatasets().filter(d => d.seriesId !== 'best') }, plugins: [crosshair],
+      options: baseOptions({
+        grid: { color: ctx => ctx.tick.value === 0 ? css('--border-strong') : css('--grid') },
+      }, v => fmtNum(v, state.regretMode === 'cum' ? 3 : 5)),
+    });
+  }
+
+  function seriesValues(res, id) {
+    if (id === 'best') return res.bestLogWealth;
+    const a = res.algorithms.concat(res.benchmarks).find(x => x.id === id);
+    return a ? a.logWealth : null;
+  }
+
+  function renderWealth() {
+    const res = state.result, xs = res.dates.map(d => Date.parse(d + 'T00:00:00Z'));
+    for (const ds of wealthChart.data.datasets) {
+      const lw = seriesValues(res, ds.seriesId);
+      ds.data = lw.map((v, t) => ({ x: xs[t], y: Math.exp(v) }));
+    }
+    wealthChart.options.scales.x.min = xs[0];
+    wealthChart.options.scales.x.max = xs[xs.length - 1];
+    wealthChart.update('none');
+  }
+
+  function renderRegret() {
+    const res = state.result, xs = res.dates.map(d => Date.parse(d + 'T00:00:00Z'));
+    const avg = state.regretMode === 'avg';
+    for (const ds of regretChart.data.datasets) {
+      const lw = seriesValues(res, ds.seriesId);
+      const pts = [];
+      for (let t = avg ? 1 : 0; t < lw.length; t++) {
+        const r = res.bestLogWealth[t] - lw[t];
+        pts.push({ x: xs[t], y: avg ? r / t : r });
+      }
+      ds.data = pts;
+    }
+    regretChart.options.scales.x.min = xs[0];
+    regretChart.options.scales.x.max = xs[xs.length - 1];
+    regretChart.update('none');
+    $('regret-sub').innerHTML = avg
+      ? 'R<sub>t</sub> / t: regret per ' + OP.FREQUENCIES[state.freq].label.toLowerCase().replace('daily', 'day').replace('weekly', 'week').replace('monthly', 'month') + ' in log-wealth. No-regret learning means this tends to 0.'
+      : 'R<sub>t</sub> = max<sub>i</sub> log W<sub>i,t</sub> − log W<sub>alg,t</sub>. A regret of R means the best single asset so far ended with e<sup>R</sup> times more money.';
+  }
+
+  // ---------- results table ----------
+  function holdingText(p, tickers) {
+    const order = p.map((v, i) => [v, tickers[i]]).sort((a, b) => b[0] - a[0]);
+    if (order[0][0] > 0.995) return order[0][1] + ' 100%';
+    const spread = order[0][0] - order[order.length - 1][0];
+    if (spread < 0.05) return '≈ uniform (' + Math.round(100 / p.length) + '% each)';
+    return order.slice(0, 3).filter(o => o[0] >= 0.01).map(o => o[1] + ' ' + Math.round(o[0] * 100) + '%').join(' · ');
+  }
+
+  function renderTable() {
+    const res = state.result, T = res.T, tbody = $('results').querySelector('tbody');
+    tbody.textContent = '';
+    const cagr = lw => Math.exp(lw / res.years) - 1;
+    const section = label => {
+      const tr = document.createElement('tr'); tr.className = 'section';
+      const td = document.createElement('td'); td.colSpan = 6; td.textContent = label;
+      tr.appendChild(td); tbody.appendChild(tr);
+    };
+    const row = (cells, swatchVar, dash) => {
+      const tr = document.createElement('tr');
+      cells.forEach((c, k) => {
+        const td = document.createElement('td');
+        if (k === 0) {
+          const span = document.createElement('span'); span.className = 'algo-name';
+          if (swatchVar) {
+            const key = document.createElement('span');
+            key.className = 'key' + (dash ? ' ' + dash : '');
+            key.style.borderTopColor = 'var(' + swatchVar + ')';
+            span.appendChild(key);
+          }
+          span.appendChild(document.createTextNode(c));
+          td.appendChild(span);
+        } else {
+          td.textContent = c;
+          if (k >= 2 && k <= 4) td.className = 'num';
+          if (k === 5) td.className = 'hold';
+          if (k === 1) td.className = 'tag';
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    };
+
+    section('Learners');
+    for (const a of res.algorithms) {
+      const spec = OP.ALGORITHMS.find(s => s.id === a.id);
+      row([a.name, spec.feedback === 'bandit' ? 'bandit' : 'full info',
+           fmtMoney(Math.exp(a.logWealth[T])), fmtPct(cagr(a.logWealth[T])), fmtNum(a.regret[T], 2),
+           holdingText(a.next, res.tickers)], '--s-' + a.id);
+    }
+    section('Benchmarks');
+    row(['Best asset in hindsight', res.bestAsset, fmtMoney(Math.exp(res.bestLogWealth[T])),
+         fmtPct(cagr(res.bestLogWealth[T])), '0.00', '—'], '--s-bench', 'dashed');
+    for (const b of res.benchmarks) {
+      row([b.name, 'rebalanced', fmtMoney(Math.exp(b.logWealth[T])), fmtPct(cagr(b.logWealth[T])),
+           fmtNum(b.regret[T], 2), holdingText(b.next, res.tickers)], '--s-bench', 'dotted');
+    }
+    section('Individual assets (buy and hold)');
+    const assets = res.assets.slice().sort((a, b) => b.logWealth[T] - a.logWealth[T]);
+    for (const a of assets) {
+      const meta = state.data.assets.find(m => m.ticker === a.ticker);
+      row([a.ticker + ' · ' + meta.name, meta.kind, fmtMoney(Math.exp(a.logWealth[T])),
+           fmtPct(cagr(a.logWealth[T])), fmtNum(res.bestLogWealth[T] - a.logWealth[T], 2), '']);
+    }
+  }
+
+  // ---------- run ----------
+  let pending = null;
+  function schedule() {
+    writeURL();
+    document.body.classList.add('busy');
+    clearTimeout(pending);
+    // let the browser paint the busy state before the (synchronous) backtest
+    pending = setTimeout(compute, 50);
+  }
+
+  function compute() {
+    const res = OP.backtest(state.data, { tickers: state.tickers, freq: state.freq, start: state.start + '-01-01' });
+    document.body.classList.remove('busy');
+    if (!res) return;
+    state.result = res;
+    const unit = { daily: 'days', weekly: 'weeks', monthly: 'months' }[state.freq];
+    $('rounds-hint').textContent = res.T.toLocaleString('en-US') + ' ' + unit + ' · ' + res.K + ' assets';
+    renderWealth();
+    renderRegret();
+    renderTable();
+  }
+
+  function rerenderTheme() {
+    if (!state.result) return;
+    createCharts();
+    renderWealth();
+    renderRegret();
+  }
+
+  async function init() {
+    readURL();
+    try {
+      const resp = await fetch('data/prices.json', { cache: 'no-cache' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      state.data = await resp.json();
+    } catch (e) {
+      const el = $('data-status');
+      el.className = 'data-status error';
+      el.textContent = 'Could not load data/prices.json (' + e.message + '). If you opened this file directly, serve the folder instead, e.g. python3 -m http.server.';
+      return;
+    }
+    const d = state.data;
+    $('data-status').textContent = 'Prices through ' + d.dates[d.dates.length - 1] + ' · refreshed ' +
+      d.updated.replace('T', ' ').replace('Z', ' UTC') + ' · ' + d.source;
+    buildControls();
+    buildLegend();
+    createCharts();
+    schedule();
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerenderTheme);
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
